@@ -1,0 +1,177 @@
+<?php
+
+namespace App\Http\Controllers;
+
+use Log;
+use App\Models\Topic;
+use App\Models\Answer;
+use App\Models\Question;
+use Illuminate\Http\Request;
+use App\Imports\QuestionsImport;
+use Illuminate\Support\Facades\DB;
+use App\Http\Requests\TopicRequest;
+use Maatwebsite\Excel\Facades\Excel;
+use App\Http\Requests\TopicQuestionRequest;
+
+class TopicController extends Controller
+{
+    public function index()
+    {
+        $topics = Topic::all();
+        return view('topics.index', ['topics' => $topics]);
+    }
+
+    public function show($id)
+    {
+        try {
+            $topic = Topic::findOrFail($id);
+
+            // Paginate questions and eager load answers
+            $questions = $topic->questions()
+                ->with('answers')
+                ->latest()
+                ->paginate(5);
+
+            return view('topics.show', compact('topic', 'questions'));
+        } catch (\Exception $e) {
+            return redirect()->back()->with('error', 'Topic not found');
+        }
+    }
+
+    public function store(TopicRequest $request)
+    {
+        $topic = new Topic();
+        $topic->name = $request->topic_name;
+        $topic->description = $request->topic_description;
+        $topic->status = $request->topic_status;
+        $topic->save();
+
+        return response()->json(['message' => 'Topic added successfully']);
+    }
+
+    public function update(TopicRequest $request, $id)
+    {
+        $topic = Topic::findOrFail($id);
+        $topic->name = $request->topic_name;
+        $topic->description = $request->topic_description;
+        $topic->status = $request->topic_status;
+        $topic->save();
+
+        return response()->json(['message' => 'Topic updated successfully']);
+    }
+
+    public function addQuestion(TopicQuestionRequest $request, $id)
+    {
+        $topic = Topic::findOrFail($id);
+
+        $question = new Question();
+        $question->topic_id = $topic->id;
+        $question->question_text = $request->question_text;
+        $question->question_type = $request->question_type;
+        $question->save();
+
+        if ($request->question_type == 'multiple_choice') {
+            foreach ($request->answers as $answer) {
+                $newAnswer = new Answer();
+                $newAnswer->question_id = $question->id;
+                $newAnswer->answer_text = $answer['text'];
+                $newAnswer->is_correct = $answer['correct'] ?? 0;
+                $newAnswer->save();
+            }
+        }
+
+        return response()->json(['message' => 'Question added successfully']);
+    }
+
+    public function deleteQuestion(Topic $topic, Question $question)
+    {
+        // $question->delete();
+
+        // return response()->json(['message' => 'Question deleted successfully']);
+        try {
+            // Menggunakan transaction untuk memastikan keberhasilan operasi atau rollback jika gagal
+            DB::beginTransaction();
+
+            // Hapus jawaban terkait jika ada (jika pertanyaan adalah pilihan ganda)
+            if ($question->question_type === 'multiple_choice') {
+                $question->answers()->delete();
+            }
+
+            // Hapus pertanyaan itu sendiri
+            $question->delete();
+
+            // Commit transaksi jika semua operasi berhasil
+            DB::commit();
+
+            return response()->json(['message' => 'Question deleted successfully']);
+        } catch (\Exception $e) {
+            // Rollback transaksi jika terjadi kesalahan
+            DB::rollback();
+
+
+            // Memberikan respons kesalahan umum
+            return response()->json(['message' => 'Failed to delete question'], 500);
+        }
+    }
+
+    public function editQuestion(Topic $topic, Question $question)
+    {
+        // Mengambil pertanyaan berdasarkan $question yang diberikan
+        //return view('topics.question_edit', compact('question'));
+        return response()->json($question->load('answers'));
+    }
+
+
+    public function updateQuestion(Request $request, Topic $topic, Question $question)
+    {
+        $validatedData = $request->validate([
+            'edit_question_text' => 'required|string',
+            // Tambahkan validasi lain sesuai kebutuhan, misalnya untuk jawaban multiple choice
+        ]);
+
+        try {
+            // Mengupdate teks pertanyaan
+            $question->question_text = $validatedData['edit_question_text'];
+
+            if ($question->question_type === 'multiple_choice') {
+                // Mengambil jawaban dari input form
+                $answers = $request->input('answers', []);
+
+                // Menghapus jawaban yang sudah ada
+                $question->answers()->delete();
+
+                // Memasukkan jawaban baru
+                foreach ($answers as $answerData) {
+                    $answer = new Answer();
+                    $answer->question_id = $question->id;
+                    $answer->answer_text = $answerData['text'];
+                    $answer->is_correct = isset($answerData['correct']) ? 1 : 0;
+                    $answer->save();
+                }
+            }
+
+            // Menyimpan perubahan pertanyaan dan jawaban
+            $question->save();
+
+            return response()->json(['message' => 'Question updated successfully']);
+        } catch (\Exception $e) {
+            return response()->json(['message' => 'Failed to update question'], 500);
+        }
+    }
+
+    public function importQuestions(Request $request, $id)
+    {
+        $request->validate([
+            'excel_file' => 'required|mimes:xlsx,xls',
+        ]);
+
+        $topic = Topic::findOrFail($id);
+
+        try {
+            Excel::import(new QuestionsImport($topic->id), $request->file('excel_file'));
+            return redirect()->route('topics.show', $topic->id)->with('success', 'Questions imported successfully.');
+        } catch (\Throwable $exception) {
+            return back()->withErrors(['error' => $exception->getMessage()]);
+        }
+    }
+}

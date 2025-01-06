@@ -1,0 +1,15 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+.question-nav-btn {
+    transition: background-color 0.3s, color 0.3s;
+}
+
+.question-nav-btn.bg-indigo-600 {
+    background-color: #4c51bf;
+}
+
+.question-nav-btn.text-white {
+    color: #fff;
+}
